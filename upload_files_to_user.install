@@ -1,0 +1,82 @@
+<?php 
+/**
+* Implements hook_schema().
+*/
+function upload_files_to_user_schema() {
+	$schema['upload_files_to_user_category'] = array(
+		'fields' => array(
+				'cid' => array(
+				'type' => 'serial',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'description' => 'Category ID',
+			),
+			'name' => array(
+				'type' => 'varchar',
+				'length' => 255,
+				'not null' => TRUE,
+				'default' => '',
+				'description' => 'Category name',
+			),
+			'description' => array(
+				'type' => 'text',
+				'not null' => FALSE,
+				'description' => 'Category description',
+			),
+			'uid' => array(
+				'type' => 'int',
+				'default' => 0,
+				'description' => 'User ID',
+			),
+			'created' => array(
+				'type' => 'int',
+				'not null' => TRUE,
+				'description' => 'unix time',
+			),			
+		),
+		'description' => 'Store Uploaded Files Categories',
+		'primary key' => array('cid'),
+	);
+	  
+	$schema['upload_files_to_user_assoc'] = array(
+		'fields' => array(
+			'cid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'description' => 'Category ID',
+			),
+			'fid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'description' => 'File ID',
+			),
+			'uid' => array(
+				'type' => 'int',
+				'size' => 'tiny',
+				'default' => 0,
+				'description' => 'User ID',
+			),
+			'title' => array(
+				'type' => 'varchar',
+				'length' => 255,
+				'not null' => TRUE,
+				'default' => '',
+				'description' => 'File Title',
+			),			
+			'created' => array(
+				'type' => 'int',
+				'not null' => TRUE,
+				'description' => 'unix time',
+			),
+		),
+		'description' => 'Store Association beetween Categories and User Files',
+		'indexes' => array(
+			'uid' => array('uid'),
+		),
+		'primary key' => array('cid','fid'),
+	);
+	
+	return $schema;
+}
