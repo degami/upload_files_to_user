@@ -191,14 +191,12 @@ function upload_files_to_user_user_documents($account){
 			$result= _upload_files_to_user_get_user_files($account,$category['cid']);
 			$items=array();
 			
-
-			
 			foreach($result as $key=>$file){
 				$ext = pathinfo($file['filename'], PATHINFO_EXTENSION);
 				if(!in_array($ext,$valid_extensions)) continue;
 				$items[]=_upload_files_to_user_print_file_widget($file,$account);
 			}
-			$out.=theme('categories_item_list',array('items'=>$items,'title'=>'<strong>'.$category['name'].'</strong>, '.format_date($category['created'],'custom',CUSTOM_DATE_FORMAT),'description'=>$category['description'],'type'=>'ul'));
+			$out.=theme('categories_item_list',array('items'=>$items,'title'=>'<strong>'.$category['name'].'</strong>, '.format_date($category['created'],'custom',CUSTOM_DATE_FORMAT),'description'=>$category['description'].((user_access('user upload documents',$user)) ? ' - '.l(t('delete'),'user/'.$account->uid.'/delete_file_category/'.$category['cid'],array('attributes'=>array('class'=>array('file_delete_lnk')))) :'' ),'type'=>'ul'));
 		}
 	}
 	
