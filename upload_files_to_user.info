@@ -1,3 +1,6 @@
 name = Upload Files To User
 description = Upload Files To User
 core = 7.x
+
+dependencies[] = user_reference
+configure = admin/config/upload_files_to_user

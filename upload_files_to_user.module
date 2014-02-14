@@ -1,5 +1,6 @@
 <?php
-
+define('UPLOAD_FILE_TO_USER_USER_REFENCE_FIELD','field_referente');
+define('UPLOAD_FILES_TO_USER_GET_ALL_FILES',-1);
 
 /**
  * Implements hook_menu().
@@ -8,7 +9,7 @@ function upload_files_to_user_menu(){
 	$items=array();
 	$items['user/%user/documents']=array(
 		'title'=>t('Documents'),
-		'page callback'=>'upload_files_to_user_user_documents',
+		'page callback'=>'upload_files_to_user_user_documents_page',
 		'page arguments'=>array(1),
 	    'access callback' => '_upload_files_to_user_check_access',
 	    'access arguments' => array('access user documents'),
@@ -38,6 +39,21 @@ function upload_files_to_user_menu(){
 	    'access callback' => '_upload_files_to_user_check_access',
 	    'access arguments' => array('user upload documents'),
 		'type' => MENU_CALLBACK,
+	);
+	
+	$items['user/%user/contact_referrer/%user']=array(
+			'page callback'=>'drupal_get_form',
+			'page arguments'=>array('upload_files_to_user_contact_referrer',1,3),
+			'access callback' => '_upload_files_to_user_check_access',
+			'access arguments' => array('user upload documents'),
+			'type' => MENU_CALLBACK,
+	);
+	$items['user/%user/update_file_category/%']=array(
+			'page callback'=>'drupal_get_form',
+			'page arguments'=>array('upload_files_to_user_update_user_category',1,3),
+			'access callback' => '_upload_files_to_user_check_access',
+			'access arguments' => array('access user documents'),
+			'type' => MENU_CALLBACK,
 	);
 	
 	$items['admin/config/upload_files_to_user'] = array(
@@ -83,10 +99,22 @@ function upload_files_to_user_permission() {
 			'title' => t('Administer Upload files to User'),
 			'description' => t('Perform administration tasks for Upload files to User.'),
 		),
+		'user create categories' =>  array(
+			'title' => t('Create Files Categories to User'),
+			'description' => t('Create Files Categories to User.'),
+		),		
 		'user upload documents' =>  array(
 			'title' => t('Upload files to User'),
 			'description' => t('Upload files to User.'),
 		),
+		'user upload documents to roles' =>  array(
+			'title' => t('Upload files to all the Users of a given role'),
+			'description' => t('Upload files to all the Users of a given role.'),
+		),
+		'user upload own documents' =>  array(
+			'title' => t('Upload files to My User'),
+			'description' => t('Upload files to my User.'),
+		),			
 		'access user documents' =>  array(
 			'title' => t('Access to User Documents Page'),
 			'description' => t('Access to User Documents Page.'),
@@ -100,7 +128,7 @@ function upload_files_to_user_permission() {
 
 function upload_files_to_user_theme($existing, $type, $theme, $path) {
 	return array(
-	    'categories_item_list' =>  array(
+	    'upload_files_to_user_categories_item_list' =>  array(
 	    	'variables'=>array(
 				'items'=>array(),
 				'title'=>'',
@@ -109,30 +137,92 @@ function upload_files_to_user_theme($existing, $type, $theme, $path) {
 				'attributes'=>array(),
 	    	)
 		),
+		'upload_files_to_user_file_widget' => array(
+			'variables'=>array(
+				'file'=>array(),
+	    	)
+		),
 	);
 }
 
 /* ############### PAGINA DOCUMENTI ######################### */
 
-function upload_files_to_user_user_documents($account){
+function upload_files_to_user_user_documents_page($account){
 	global $user;
+	$tech_role_rid = variable_get('upload_files_to_user_technics_user_role', _upload_files_to_user_get_rid_by_name('administrator'));
+	$tech_role_name = is_numeric($tech_role_rid) ? user_role_load($tech_role_rid)->name : '';
+
+	drupal_add_css('.clear{width: 100%;height: 1px;padding: 0;margin:0;clear:both;float: none;}', 'inline');
+
+	$out = "";
+	if($account->uid != $user->uid){
+		$out.= l(t('Back to my documents area'),'user/'.$user->uid.'/documents',array('attributes'=>array('class'=>array('back_link'))));
+	}
+
+	if( (trim($tech_role_name) != '' && in_array($tech_role_name,$account->roles)) || (in_array('administrator',$user->roles) && $account->uid == 1) ){
+		$accounts = _upload_files_to_user_get_clients_uids($user);
+		$items=array();
+		if(is_array( $accounts )){
+			foreach($accounts as $acc){
+				if ($client_account = user_load($acc->uid)) {
+					$items[]=l($client_account->name,'user/'.$client_account->uid.'/documents');
+				}
+			}			
+		}
+
+		$out .= '<h2>'.t('My Clients').'</h2>'.theme('item_list',array('items'=>$items)).'';
+		$out .= _upload_files_to_user_get_user_category_documents($account, null); // file senza categoria - caricati al ruolo
+
+		if(user_access('user upload documents to roles',$user)){
+			$form_multiupload = drupal_get_form('upload_files_to_user_multiupload_file');
+			$out.=render($form_multiupload);
+		}
+		// $out = '<div class="documents">'.$out.'</div>';
+
+	}else{
+		$out .= upload_files_to_user_client_documents_page($account);
+	}
+/*	
+	$files=_upload_files_to_user_get_user_files($account);
+	if(count($files)==0){
+		$out='<h3>'.t('No documents found.').'</h3>'.$out;
+	}
+*/
+	$out = '<div class="documents">'.$out.'</div>';
+	return $out;
+}
+
+/* ############### PAGINA DOCUMENTI CLIENTE ######################### */
+
+function _upload_files_to_user_get_intro($account){
+	$intro = variable_get('intro_page_documenti_'.$account->language,'');
+	drupal_alter('upload_files_to_user_page_intro', $intro);
+	return $intro;
+}
+
+function upload_files_to_user_client_documents_page($account){
+	global $user; 
 	drupal_set_title(t('Documents'));
 
 	$valid_extensions=array_filter(array_map('trim',explode(' ',variable_get('documents_extensions','doc docx pdf rtf'))));
-	
-	$out='<p class="intro_page">'.variable_get('intro_page_documenti_'.$account->language,'').'</p>';
-		
+
+	$out = '';
+	$out .= '<div class="intro_page">'._upload_files_to_user_get_intro($account).'</div>';
+	if( ($referrerdata = _upload_files_to_user_print_referrer_data($account)) !== false ){
+		$out .= $referrerdata;
+	}
+
 	if( variable_get('documents_print_mode', 'list') == 'table' ){
 		$table=array('header'=>array(),'rows'=>array(),'attributes'=>array('width'=>'100%','style'=>'width: 100%;margin-top: 20px;'));
 		
 		$colspan = variable_get('documents_columns_user_table', 1);
 		if( $colspan == 1 ){
-			$table['header']=Array('');
+			$table['header']=array();
 			if(variable_get('documents_show_file_details', 1) == 1){
 				$table['header'] = array_merge($table['header'],array(
-				t('File Name'),t('File type'),t('File size'),t('Created on')
+					t('Title'),t('Tag'),t('File Name'),t('File type'),t('File size'),t('Created on')
 				));
-				$colspan+=4;
+				$colspan+=6;
 			}
 		
 			if(user_access('user upload documents',$user)){
@@ -142,7 +232,7 @@ function upload_files_to_user_user_documents($account){
 		}else{
 			$table['header']=null;
 		}
-		
+
 		$start=0;
 		$query=db_select('upload_files_to_user_category','c');
 		$query->addExpression('COUNT(*)','totale');
@@ -159,18 +249,16 @@ function upload_files_to_user_user_documents($account){
 		
 		$categories=_upload_files_to_user_get_user_categories($account,$start,$pager['items_per_page']);
 		foreach($categories as $category){
-		
 			if(variable_get('documents_columns_user_table', 1) == 1){
 				$table['rows'][]=array(
-						'data'		=>	'<div class="category-name">'.'<strong>'.$category['name'].'</strong>, '.format_date($category['created'],'custom',CUSTOM_DATE_FORMAT).'</div>',
+						'data'		=>	'<div class="category-name">'.'<strong>'.$category['name'].'</strong>, '.format_date($category['created'],variable_get('upload_files_to_user_date_format','')).'</div>',
 						'colspan'	=>	$colspan,
 				);
 			}
-		
 			$result= _upload_files_to_user_get_user_files($account,$category['cid']);
 			foreach($result as $key=>$file){
 				$ext = pathinfo($file['filename'], PATHINFO_EXTENSION);
-				if(!in_array($ext,$valid_extensions)) continue;
+				if(!in_array(strtolower($ext),$valid_extensions)) continue;
 		
 				$widget=_upload_files_to_user_print_file_widget($file,$account);
 				if(is_array($widget)){
@@ -182,7 +270,6 @@ function upload_files_to_user_user_documents($account){
 					);
 				}
 			}
-		
 		}
 		$out.=theme('table',$table);
 	}else{
@@ -193,49 +280,61 @@ function upload_files_to_user_user_documents($account){
 			
 			foreach($result as $key=>$file){
 				$ext = pathinfo($file['filename'], PATHINFO_EXTENSION);
-				if(!in_array($ext,$valid_extensions)) continue;
+				if(!in_array(strtolower($ext),$valid_extensions)) continue;
 				$items[]=_upload_files_to_user_print_file_widget($file,$account);
 			}
-			$out.=theme('categories_item_list',array('items'=>$items,'title'=>'<strong>'.$category['name'].'</strong>, '.format_date($category['created'],'custom',CUSTOM_DATE_FORMAT),'description'=>$category['description'].((user_access('user upload documents',$user)) ? ' - '.l(t('delete'),'user/'.$account->uid.'/delete_file_category/'.$category['cid'],array('attributes'=>array('class'=>array('file_delete_lnk')))) :'' ),'type'=>'ul'));
+			$out.=theme('upload_files_to_user_categories_item_list',array('items'=>$items,'title'=>'<strong>'.$category['name'].'</strong> - '.format_date($category['created'],variable_get('upload_files_to_user_date_format','')),'description'=>$category['description'].((user_access('user upload documents',$user)) ? ' - '.l(t('delete'),'user/'.$account->uid.'/delete_file_category/'.$category['cid'],array('attributes'=>array('class'=>array('file_delete_lnk')))).' '.l(t('modifica'),'user/'.$account->uid.'/update_file_category/'.$category['cid'],array('attributes'=>array('class'=>array('file_update_lnk')))) :'' ),'type'=>'ul'));
 		}
 	}
+	$out.='<div class="clear"></div>';
 	
 	pager_default_initialize($pager['total_rows'], $pager['items_per_page']);
 	$output_pager = theme('pager', array('quantity' => 10));
-	
-	$out.=$output_pager;
-	
-	$form_category=drupal_get_form('upload_files_to_user_form_create_category',array('user'=>$account));
+	$out.=$output_pager.'<div class="clear"></div>';
+
+	$out .= _upload_files_to_user_get_user_category_documents($account, null);
+
 	$form_upload=drupal_get_form('upload_files_to_user_form_upload_files',array('user'=>$account));
-	
-	if(user_access('user upload documents',$user)){
+
+	if(user_access('user create categories',$user)){
+		$form_category=drupal_get_form('upload_files_to_user_form_create_category',array('user'=>$account));
 		$out.=render($form_category);
+	}
+
+	if(user_access('user upload documents',$user)){
+		$out.=render($form_upload);
+	}else if(user_access('user upload own documents',$user) && arg(0)=='user' && $user->uid==$account->uid){
 		$out.=render($form_upload);
 	}
 
+	if(user_access('user upload documents to roles',$user)){
+		$form_multiupload = drupal_get_form('upload_files_to_user_multiupload_file');
+		$out.= '<div class="clear"></div>'.render($form_multiupload);
+	}
+
+	$files = _upload_files_to_user_get_user_files($account,UPLOAD_FILES_TO_USER_GET_ALL_FILES);
+	if(count($files)==0){
+		$out='<h3>'.t('No documents found.').'</h3>'.$out;
+	}
+
+	// return '<div class="documents">'.$out.'</div>';
 	return $out;
 }
 
-function upload_files_to_user_user_category_documents($account,$cid){
-	$category=_upload_files_to_user_get_category($cid);
-	drupal_set_title($category['name'].' - '.t('Documents'));
-	
-	$out='<p class="intro_page">'.variable_get('intro_page_documenti_'.$account->language,'').'</p>';
+function _upload_files_to_user_get_user_category_documents($account, $cid = null){
+	$out = '';
 	$valid_extensions=array_filter(array_map('trim',explode(' ',variable_get('documents_extensions','doc docx pdf rtf'))));
-	
 	if( variable_get('documents_print_mode', 'list') == 'table' ){
 		$table=array('header'=>array(),'rows'=>array(),'attributes'=>array('width'=>'100%','style'=>'width: 100%;margin-top: 20px;'));
-	
 		$colspan = variable_get('documents_columns_user_table', 1);
 		if( $colspan == 1 ){
-			$table['header']=Array('');
+			$table['header']=array();
 			if(variable_get('documents_show_file_details', 1) == 1){
 				$table['header'] = array_merge($table['header'],array(
-				t('File Name'),t('File type'),t('File size'),t('Created on')
+					t('Title'),t('Tag'),t('File Name'),t('File type'),t('File size'),t('Created on')
 				));
-				$colspan+=4;
+				$colspan+=6;
 			}
-	
 			if(user_access('user upload documents',$user)){
 				$table['header'][]='';
 				$colspan++;
@@ -243,42 +342,87 @@ function upload_files_to_user_user_category_documents($account,$cid){
 		}else{
 			$table['header']=null;
 		}
-	
+		$result= _upload_files_to_user_get_user_files($account,$cid);
+		if(!empty($result)){
+			foreach($result as $key=>$file){
+				$ext = pathinfo($file['filename'], PATHINFO_EXTENSION);
+				if(!in_array(strtolower($ext),$valid_extensions)) continue;
 		
-		if(variable_get('documents_columns_user_table', 1) == 1){
-			$table['rows'][]=array(
-						'data'		=>	'<div class="category-name">'.$category['description'].'</div>',
-						'colspan'	=>	$colspan,
-			);
+				$widget=_upload_files_to_user_print_file_widget($file,$account);
+				if(is_array($widget)){
+					// array = 1 colonna
+					$table['rows'][]=$widget;
+				}else{
+					$table['rows'][$key%variable_get('documents_columns_user_table', 1)]=array(
+						$widget
+					);
+				}
+			}
+			if($cid == null){
+				// aggiungo link per filtro su tag
+				$out .= _upload_file_to_user_tag_filter_links(_upload_files_to_user_get_user_files($account,UPLOAD_FILES_TO_USER_GET_ALL_FILES));
+			}
+			$out.=theme('table',$table);
 		}
-		$result= _upload_files_to_user_get_user_files($account,$category['cid']);
-		foreach($result as $key=>$file){
-			$ext = pathinfo($file['filename'], PATHINFO_EXTENSION);
-			if(!in_array($ext,$valid_extensions)) continue;
-
-			$widget=_upload_files_to_user_print_file_widget($file,$account);
-			if(is_array($widget)){
-				// array = 1 colonna
-				$table['rows'][]=$widget;
+	}else{
+		$result= _upload_files_to_user_get_user_files($account,$cid);
+		if(!empty($result)){
+			$items=array();
+			foreach($result as $key=>$file){
+				$ext = pathinfo($file['filename'], PATHINFO_EXTENSION);
+				if(!in_array(strtolower($ext),$valid_extensions)) continue;
+				$items[]=_upload_files_to_user_print_file_widget($file,$account);
+			}
+			if($cid == null){
+				// aggiungo link per filtro su tag
+				$out .= _upload_file_to_user_tag_filter_links(_upload_files_to_user_get_user_files($account,UPLOAD_FILES_TO_USER_GET_ALL_FILES));
+				$out .= theme('upload_files_to_user_categories_item_list',array('items'=>$items,'title'=>'','description'=>'','type'=>'ul'));
 			}else{
-				$table['rows'][$key%variable_get('documents_columns_user_table', 1)]=array(
-				$widget
-				);
+				$out .= theme('upload_files_to_user_categories_item_list',array('items'=>$items,'title'=>'<strong>'.$category['name'].'</strong> - '.format_date($category['created'],variable_get('upload_files_to_user_date_format','')),'description'=>$category['description'].((user_access('user upload documents',$user)) ? ' - '.l(t('delete'),'user/'.$account->uid.'/delete_file_category/'.$category['cid'],array('attributes'=>array('class'=>array('file_delete_lnk')))).' '.l(t('modifica'),'user/'.$account->uid.'/update_file_category/'.$category['cid'],array('attributes'=>array('class'=>array('file_update_lnk')))) :'' ),'type'=>'ul'));
 			}
 		}
-		$out.=theme('table',$table);
-	}else{
-		$result= _upload_files_to_user_get_user_files($account,$category['cid']);
-		$items=array();
-		foreach($result as $key=>$file){
-			$ext = pathinfo($file['filename'], PATHINFO_EXTENSION);
-			if(!in_array($ext,$valid_extensions)) continue;
-			$items[]=_upload_files_to_user_print_file_widget($file,$account);
-		}
-		
-		$out.=theme('item_list',array('items'=>$items,'title'=>'','description'=>$category['description'],'type'=>'ul'));
 	}
-	
+
+	return $out;
+}
+
+function _upload_file_to_user_tag_filter_links($files = array()){
+	$categories = array('all' => l(t('All'),$_GET['q']));
+	foreach($files as $file){
+		if(!in_array($file['tag'], array_keys($categories)))
+			$categories[$file['tid']] = l($file['tag'],$_GET['q'],array('query'=>array('tag'=>$file['tid'])));
+	}
+	$form_ricerca = drupal_get_form('upload_files_to_user_filetitle_form');
+	return t('Show').' '.theme('item_list',array('items'=>$categories)).render($form_ricerca);
+}
+
+function upload_files_to_user_filetitle_form($form,&$form_state){
+	$form['#method'] = 'GET';
+	$form['title'] = array(
+		'#title' => t('Title'),
+		'#type' => 'textfield',
+		'#default_value' => $_REQUEST['title'],
+	);
+	$form['submit'] = array(
+		'#type'=>'submit',
+		'#value' => t('Search'),
+	);
+	$form['reset'] = array(
+		'#markup' => l(t('Show All'),$_GET['q']),
+	);
+	return $form;
+}
+
+function upload_files_to_user_user_category_documents($account,$cid){
+	$category=_upload_files_to_user_get_category($cid);
+	drupal_set_title($category['name'].' - '.t('Documents'));
+	$valid_extensions=array_filter(array_map('trim',explode(' ',variable_get('documents_extensions','doc docx pdf rtf'))));
+
+	$out='<div class="intro_page">'._upload_files_to_user_get_intro($account).'</div>';	
+	if( ($referrerdata = _upload_files_to_user_print_referrer_data($account)) !== false ){
+		$out .= $referrerdata;
+	}
+	$out.=_upload_files_to_user_get_user_category_documents($account,$category['cid']);
 	return $out;
 }
 
@@ -299,7 +443,8 @@ function upload_files_to_user_user_category_documents($account,$cid){
  *   - type: The type of list to return (e.g. "ul", "ol").
  *   - attributes: The attributes applied to the list element.
  */
-function theme_categories_item_list($variables) {
+function theme_upload_files_to_user_categories_item_list($variables) {
+	$account = user_load(arg(1));
 	$items = $variables['items'];
 	$title = $variables['title'];
 	$description = $variables['description'];
@@ -309,7 +454,9 @@ function theme_categories_item_list($variables) {
 	// Only output the list container and title, if there are any list items.
 	// Check to see whether the block title exists before adding a header.
 	// Empty headers are not semantic and present accessibility challenges.
-	$output = '<div class="item-list">';
+
+	//$output = '<strong>'.t('Orders by :clientname',array(':clientname' => $account->name )).'</strong> <div class="item-list"><div class="items">';
+	$output = '<div class="files-item-list"><div class="items">';
 	if (isset($title) && $title !== '') {
 		$output .= '<div class="title">' . $title . '</div>';
 	}
@@ -353,7 +500,42 @@ function theme_categories_item_list($variables) {
 		}
 		$output .= "</$type>";
 	}
-	$output .= '</div>';
+	$output .= '</div></div>';
+	return $output;
+}
+
+/**
+ * Returns HTML for a single file
+ *
+ * @param $variables
+ *   An associative array containing:
+ *   - file: An array with file informations
+ */
+function theme_upload_files_to_user_file_widget($variables){
+	$file = $variables['file'];
+	$out=l(
+		trim($file['file_title'])!='' ? trim($file['file_title']) : t('download') ,
+		url(
+			file_create_url(file_load($file['fid'])->uri),
+			array('absolute'=>true)
+		) ,
+		array(
+				'attributes'=>array(
+					'class'=>array('file_download_lnk'),
+					'target'=>'_blank',
+				)
+		)
+	);
+
+	if(variable_get('documents_show_file_details', 1) == 1){
+		$output .= '<div class="file-widget">'.
+			'<div class="tag">'.((variable_get('documents_show_labels', 1) == 1) ? '<span class="widget-label">'.t('Tag').'</span> ' : '').''.$file['tag'].'</div>'.
+			'<div class="filename">'.((variable_get('documents_show_labels', 1) == 1) ? '<span class="widget-label">'.t('File Name').'</span> ' : '').''.$file['filename'].'</div>'.
+			'<div class="filemime">'.((variable_get('documents_show_labels', 1) == 1) ? '<span class="widget-label">'.t('File type').'</span> ' : '').''.$file['filemime'].'</div>'.
+			'<div class="filesize">'.((variable_get('documents_show_labels', 1) == 1) ? '<span class="widget-label">'.t('File size').'</span> ' : '').''.format_size($file['filesize']).'</div>'.
+			'<div class="timestamp">'.((variable_get('documents_show_labels', 1) == 1) ? '<span class="widget-label">'.t('Created on').'</span> ' : '').''.format_date($file['timestamp'],variable_get('upload_files_to_user_date_format','')).'</div>'.
+		'</div>';	
+	}
 	return $output;
 }
 
@@ -362,27 +544,29 @@ function theme_categories_item_list($variables) {
 function upload_files_to_user_form_create_category($form,&$form_state){
 	$form=array();
 
+	$form['#prefix']='<div class="item-category"><div class="title">'.t('Create new Project').'</div>';
+	$form['#suffix']='</div>';
+	
 	$form['#id']='user-upload-documents-create-directory';
+	
 	$user=$form_state['build_info']['args'][0]['user'];
 	$form['uid']=array(
 		'#type'=>'hidden',
 		'#value'=>$user->uid,
 	);
 
-	$form['addcategory'] = array('#type'=>'fieldset','#title'=>t('Create a new category'));
-
+	$form['addcategory'] = array('#type'=>'fieldset');
 	$form['addcategory']['category']=array(
 		'#type'=>'textfield',
-		'#title'=>t('Category Name'),
+		'#title'=>t('Project Name'),
 		'#required'=>true,
 	);
 	$form['addcategory']['description']=array(
 		'#type'=>'textarea',
-		'#title'=>t('Category Description'),
+		'#title'=>t('Project Description'),
 		'#rows'=>2,
 		'#required'=>true,
 	);
-	
 	$form['addcategory']['submit']=array('#type'=>'submit','#value'=>t('Submit'));
 	return $form;
 }
@@ -391,23 +575,7 @@ function upload_files_to_user_form_create_category_validate($form,&$form_state){
 }
 
 function upload_files_to_user_form_create_category_submit($form,&$form_state){
-	global $language;
-	db_insert('upload_files_to_user_category')
-	->fields(array(
-		'name'			=>	$form_state['values']['category'],
-		'description'	=>	$form_state['values']['description'],
-		'uid'			=>	$form_state['values']['uid'],
-		'created'		=>	time(),
-	))
-	->execute();
-	
-	drupal_set_message(t('New Category created'));
-	
-	if( variable_get('notify_users_new_document_category',false) == true ){
-		$account=user_load($form_state['values']['uid']);
-		drupal_mail('upload_files_to_user','new_category',variable_get('site_mail',''),$language,array('account'=>$account,'category_name'=>$form_state['values']['category'],'category_description'=>$form_state['values']['description']),$account->mail);
-	}
-	
+	_upload_files_to_user_category_create_values_save($form_state['values']);
 	drupal_goto('user/'.$form_state['values']['uid'].'/documents');
 }
 
@@ -427,44 +595,82 @@ function upload_files_to_user_delete_user_category($form,&$form_state){
 }
 
 function upload_files_to_user_delete_user_category_submit($form,&$form_state){
-	$account=user_load($form_state['values']['uid']);
+	$uid=$form_state['values']['uid'];
 	$cid=$form_state['values']['cid'];
 
-	$numfiles=0;
-	$numassocs=0;
-	foreach(_upload_files_to_user_get_category_fids($cid) as $fid){
-		$file=file_load($fid);
-		if($file!==false && $account!==false && $file->uid==$account->uid){
-			if( file_delete($file) === true ){
-
-				$numassocs += db_delete('upload_files_to_user_assoc')
-				->condition('cid',$cid,'=')
-				->condition('fid',$fid,'=')
-				->execute();
-
-				$numfiles++;
-			}
-		}
-	}
-	if($numfiles>0) drupal_set_message(t('!numfiles files deleted successfully',array('!numfiles'=>$numfiles)));
-
-	$num_deleted=db_delete('upload_files_to_user_category')
-	->condition('cid',$cid,'=')
-	->execute();
-
-	if($num_deleted<=0 || $numassocs!=$numfiles )
-		drupal_set_message(t('Errors deleting the user category'),'error');
-	else
+	$success = _upload_files_to_user_category_delete($cid,$uid);
+	if( $success == true ){
 		drupal_set_message(t('Category deleted successfully'));
+	}else{
+		drupal_set_message(t('Errors deleting the user category'),'error');
+	}
 
 	drupal_goto('user/'.$account->uid.'/documents');
 }
+
+
+function upload_files_to_user_update_user_category($form,&$form_state){
+	$form=array();
+
+	$form['#attributes']=array('style'=>'width: 600px;');
+
+	$account=$form_state['build_info']['args'][0];
+	$cid=$form_state['build_info']['args'][1];
+
+	$form['uid']=array('#type'=>'hidden','#value'=>$account->uid);
+	$form['cid']=array('#type'=>'hidden','#value'=>$cid);
+	
+	
+	$date_category= _upload_files_to_user_get_category($cid);
+
+	$form['updatecategory'] = array('#type'=>'fieldset');
+
+	$form['updatecategory']['category']=array(
+		'#type'=>'textfield',
+		'#title'=>t('Category Name'),
+		'#default_value'=>$date_category['name'],
+		'#required'=>true,
+	);
+	$form['updatecategory']['description']=array(
+		'#type'=>'textarea',
+		'#title'=>t('Category Description'),
+		'#rows'=>2,
+		'#default_value'=>$date_category['description'],
+		'#required'=>true,
+	);
+	
+	$form['updatecategory']['submit']=array('#type'=>'submit','#value'=>t('Submit'));
+	return $form;	
+}
+
+function upload_files_to_user_update_user_category_submit($form,&$form_state){
+	$account=user_load($form_state['values']['uid']);
+	$cid=$form_state['values']['cid'];
+
+	db_update('upload_files_to_user_category')
+		->fields(array(
+			'name' => $form_state['values']['category'],
+			'description' => $form_state['values']['description'],
+			))
+		->condition('cid',$cid,'=')
+		->execute();
+	
+	drupal_set_message(t('!numfiles files updated successfully',array('!numfiles'=>$numfiles)));
+
+	drupal_goto('user/'.$account->uid.'/documents');
+}
+
+
 
 /* ############### FILES ######################### */
 
 function upload_files_to_user_form_upload_files($form,&$form_state){
 	$form=array();
 
+	$form['#prefix']='<div class="item-files"><div class="title">'.t('Documents Upload').'</div>';
+	$form['#suffix']='</div>';
+	
+	
 	$form['#id']='user-upload-documents';
 
 	$max_upload = (int)(ini_get('upload_max_filesize'));
@@ -479,9 +685,9 @@ function upload_files_to_user_form_upload_files($form,&$form_state){
 		'#value'=>$user->uid,
 	);
 
-	$form['addfile'] = array('#type'=>'fieldset','#title'=>t('Upload a new file'));
+	$form['addfile'] = array('#type'=>'fieldset');
 
-	$categories = array(''=>t('Select a category.'));
+	$categories = array(''=>t('Select a project.'));
 	foreach(_upload_files_to_user_get_user_categories($user) as $category){
 		$categories[$category['cid']]=$category['name'];
 	}
@@ -489,7 +695,7 @@ function upload_files_to_user_form_upload_files($form,&$form_state){
 	$form['addfile']['filecategory'] = array(
 		'#type'=>'select',
 		'#required'=>true,
-		'#title'=>t('Category'),	
+		'#title'=>t('Project'),	
 		'#options'=>$categories,
 	);
 	
@@ -497,6 +703,18 @@ function upload_files_to_user_form_upload_files($form,&$form_state){
 		'#type'=>'textfield',
 		'#title'=>t('Title'),
 		'#required'=>true,
+	);
+
+	$tagoptions = array();
+	$terms = taxonomy_get_tree(_upload_files_to_user_get_vid(variable_get('upload_files_to_user_tags_vocabulary_name','tags')));
+	foreach ($terms as $data) {
+		$tagoptions[$data->tid] = $data->name;
+	}
+	$form['addfile']['filetag'] = array(
+		'#type'=>'select',
+		'#title'=>t('Tag'),
+		'#required'=>true,
+		'#options'=>$tagoptions,
 	);
 	
 	$extensions=explode(' ',variable_get('documents_extensions','doc docx pdf rtf'));
@@ -514,7 +732,12 @@ function upload_files_to_user_form_upload_files($form,&$form_state){
 		'#description'=>t('extensions allowed: !extension_list , max file size: !maxfilesize MB',Array('!extension_list'=>implode(' ',$extensions),'!maxfilesize'=>$upload_mb)),
 	);
 
-	$form['addfile']['submit']=array('#type'=>'submit','#value'=>t('Submit'));
+	$form['addfile']['submit']=array(
+			'#type'=>'submit',
+			'#prefix' => '<div class="btncontainer">',
+			'#suffix' => '</div>',
+			'#value'=>t('Submit')
+			);
 	return $form;
 }
 
@@ -522,33 +745,121 @@ function upload_files_to_user_form_upload_files_validate($form,&$form_state){
 }
 
 function upload_files_to_user_form_upload_files_submit($form,&$form_state){
-	global $language;
-	if( ($file = file_load($form_state['values']['uploadfile'])) !== false ){
-		$file->status = FILE_STATUS_PERMANENT;
-		$file->uid = $form_state['values']['uid'];
-		file_save($file);
-		
-		$fid=$file->fid;
-		$cid=$form_state['values']['filecategory'];
-		$title=$form_state['values']['filetitle'];
-		
-		db_insert('upload_files_to_user_assoc')
-		->fields(array(
-				'cid'		=>	$cid,
-				'fid'		=>	$fid,
-				'uid'		=>	$form_state['values']['uid'],
-				'title'		=>	$title,
-				'created'	=>	time(),
-		))
-		->execute();
-		
-		drupal_set_message(t('File uploaded succesfully'));
+	global $language,$user;
+	_upload_files_to_user_upload_file_values_save($form_state['values']);
+}
+	
+function upload_files_to_user_multiupload_file($form,&$form_state){
+	$form['#id']='user-multiupload-documents';
 
-		if( variable_get('notify_users_new_document_file',false) == true){
-			$account=user_load($form_state['values']['uid']);
-			drupal_mail('upload_files_to_user','new_file',variable_get('site_mail',''),$language,array('account'=>$account,'file'=>$file),$account->mail);
-		}		
-	}	
+	$form['fieldset']=array(
+		'#type'=>'fieldset',
+		'#title'=>t('Upload to multiple users'),
+		'#collapsible'=>true,
+		'#collapsed'=>true,
+		'#prefix'=>'<div class="clear"></div>',
+	);
+
+	$max_upload = (int)(ini_get('upload_max_filesize'));
+	$max_post = (int)(ini_get('post_max_size'));
+	$memory_limit = (int)(ini_get('memory_limit'));
+	$upload_mb = min($max_upload, $max_post, $memory_limit);
+
+	$roles=user_roles();
+
+	unset($roles[DRUPAL_ANONYMOUS_RID]);
+	unset($roles[DRUPAL_AUTHENTICATED_RID]);
+	$r=array('all'=>t('All'));
+	$roles = ($r+=$roles);
+
+	$form['fieldset']['roles']=array(
+		'#type'=>'checkboxes',
+		'#title'=>t('Roles'),
+		'#options'=>$roles,
+		'#required'=>true,
+		'#suffix'=>'<div class="clear"></div>',
+	);
+
+	$form['fieldset']['filetitle'] = array(
+		'#type'=>'textfield',
+		'#title'=>t('Title'),
+		'#required'=>true,
+	);
+	$tagoptions = array();
+	$terms = taxonomy_get_tree(_upload_files_to_user_get_vid(variable_get('upload_files_to_user_tags_vocabulary_name','tags')));
+	foreach ($terms as $data) {
+		$tagoptions[$data->tid] = $data->name;
+	}
+	$form['fieldset']['filetag'] = array(
+		'#type'=>'select',
+		'#title'=>t('Tag'),
+		'#required'=>true,
+		'#options'=>$tagoptions,
+	);
+
+	$extensions=explode(' ',variable_get('documents_extensions','doc docx pdf rtf'));
+	foreach($extensions as &$ext) $ext='.'.trim($ext);
+
+	$form['fieldset']['uploadfile']=array(
+		'#type'=>'managed_file',
+		'#title'=>t('Upload document'),
+		'#upload_validators' => array(
+		    'file_validate_extensions' => array(variable_get('documents_extensions','doc docx pdf rtf')),
+			// Pass the maximum file size in bytes
+		    'file_validate_size' => array($upload_mb * 1024 * 1024),
+		),
+		'#upload_location'=>'public://'.$user->uid.'/documents/',
+		'#description'=>t('extensions allowed: !extension_list , max file size: !maxfilesize MB',Array('!extension_list'=>implode(' ',$extensions),'!maxfilesize'=>$upload_mb)),
+		'#required'=>true,
+	);
+
+	$form['fieldset']['submit']=array('#type'=>'submit','#value'=>t('Submit'));
+	return $form;
+}
+
+function upload_files_to_user_multiupload_file_validate($form,&$form_state){
+}
+
+function upload_files_to_user_multiupload_file_submit($form,&$form_state){
+	global $language;
+	$roles=$form_state['values']['roles'];
+	if(!empty($roles['all'])){
+		foreach($roles as $k=>$v){
+			$roles[$k]=1;
+		}
+	}
+	$roles=array_filter($roles);
+	if(isset($roles['all'])) unset($roles['all']);
+
+	$title=$form_state['values']['filetitle'];
+	$tid=$form_state['values']['filetag'];
+
+	$q=db_select('users', 'u');
+	$q->fields('u',array('uid','mail'));
+	$q->join('users_roles','ur','u.uid=ur.uid');
+	$q->condition('ur.rid',array_keys($roles),'IN');
+	$accounts=$q->execute()->fetchAll(PDO::FETCH_OBJ);
+
+	$numfiles=0;
+	$source=file_load($form_state['values']['uploadfile']);
+	foreach($accounts as $account){
+		$account=user_load($account->uid);
+		if($account === false) continue;
+
+		$destdir='public://'.$account->uid.'/documents/';
+		file_prepare_directory($destdir,FILE_CREATE_DIRECTORY|FILE_MODIFY_PERMISSIONS);
+		if( ($file = file_copy( $source, $destdir.$source->filename , FILE_EXISTS_RENAME )) !== false ){
+			$file->status = FILE_STATUS_PERMANENT;
+			$file->uid = $account->uid;
+			file_save($file);
+
+			$success = _upload_files_to_user_save_file($account->uid,null,$title,$tid,$file);
+			if($success == true)
+				$numfiles++;
+		}
+	}
+	file_delete($source);
+	drupal_set_message(t(':numfiles files uploaded succesfully',array(':numfiles'=>$numfiles)));
 }
 
 function upload_files_to_user_delete_user_file($form,&$form_state){
@@ -573,53 +884,113 @@ function upload_files_to_user_delete_user_file($form,&$form_state){
 
 function upload_files_to_user_delete_user_file_submit($form,&$form_state){
 	$account=user_load($form_state['values']['uid']);
-	$fid=$form_state['values']['fid'];
+	$uid = $account->uid;
 
+	$fid=$form_state['values']['fid'];
 	$file=file_load($fid);
-	if($file!==false && $account!==false && $file->uid==$account->uid){
-		file_delete($file);
-		drupal_set_message(t('File deleted successfully'));
-	}
+
+	_upload_files_to_user_file_delete($uid,$file);
+
 	drupal_goto('user/'.$account->uid.'/documents');
 }
 
 /* ############### ADMIN ######################### */
 
 function upload_files_to_user_form_admin($form,&$form_state){
-	$form['documents_extensions'] = array(
+	$form['global']=array('#type'=>'fieldset','#title'=>'Upload Files To user settings');
+
+	$form['global']['upload_files_to_user_clients_user_role']=array(
+		'#type'=>'select',
+		'#options'=> user_roles(),
+		'#title'=>t('Client user role'),
+		'#default_value'=>variable_get('upload_files_to_user_clients_user_role',''),
+	);
+
+	$form['global']['upload_files_to_user_technics_user_role']=array(
+		'#type'=>'select',
+		'#options'=> user_roles(),
+		'#title'=>t('Technical user role'),
+		'#default_value'=>variable_get('upload_files_to_user_technics_user_role', _upload_files_to_user_get_rid_by_name('administrator') ),
+	);
+
+	$form['global']['documents_extensions'] = array(
 		'#type' => 'textfield',
 		'#title' => t('Estensioni valide per documenti su sezione Documenti'),
 		'#default_value' => variable_get('documents_extensions', 'doc docx pdf rtf'),
 	);
 	
-	$form['documents_print_mode'] = array(
+	$vocabulary_names = array();
+	$names=taxonomy_vocabulary_get_names();
+	foreach($names as $voc){
+		$vocabulary_names[$voc->machine_name]=$voc->name;
+	}
+	$form['global']['upload_files_to_user_tags_vocabulary_name'] = array(
+		'#type' => 'select',
+		'#title' => t('Tags Vocabulary'),
+		'#options' => $vocabulary_names,
+		'#default_value' => variable_get('upload_files_to_user_tags_vocabulary_name','tags'),
+	);
+
+	$form['page']=array('#type'=>'fieldset','#title'=>'Documents area settings');
+
+	$form['page']['documents_print_mode'] = array(
 		'#type' => 'select',
 		'#options'=>array('list'=>t('HTML list'),'table'=>t('Tabella')),
 		'#title' => t('Modalità visualizzazione pagina utente'),
 		'#default_value' => variable_get('documents_print_mode', 'list'),
 	);
 	
-	$form['documents_categories_per_page'] = array(
+	$form['page']['documents_categories_per_page'] = array(
 		'#type' => 'textfield',
 		'#title' => t('Numero categorie per pagina'),
 		'#default_value' => variable_get('documents_categories_per_page', 5),
 	);
 	
-	$form['documents_columns_user_table'] = array(
+	$form['page']['documents_columns_user_table'] = array(
 		'#type' => 'textfield',
 		'#title' => t('Numero colonne tabella su pagina utente'),
 		'#default_value' => variable_get('documents_columns_user_table', 1),
 		'#description'=>t('Valido solo per la visualizzazione in tabella'),
 	);
 	
-	$form['documents_show_file_details'] = array(
+	$form['page']['documents_show_file_details'] = array(
 		'#type' => 'checkbox',
 		'#title' => t('Visualizza informazioni sul file'),
 		'#default_value' => variable_get('documents_show_file_details', 1),
 	);
-	
+
+	$form['page']['documents_show_labels'] = array(
+		'#type' => 'checkbox',
+		'#title' => t('Visualizza etichette nelle informazioni sul file per visualizzazione lista'),
+		'#default_value' => variable_get('documents_show_labels', 1),
+	);
+
+	$date_formats = array(''=>'');
+	foreach(array_keys(system_get_date_formats()) as $dateformat){
+		$date_formats[$dateformat] = $dateformat;
+	}
+
+	$form['page']['upload_files_to_user_date_format']=array(
+		'#type'=>'select',
+		'#options'=>$date_formats,
+		'#title'=>t('Date format for files/categories timestamp'),
+		'#default_value'=>variable_get('upload_files_to_user_date_format',''),
+	);
+
+	$form['page']['referrer']=array('#type'=>'fieldset','#title'=>'Referrer info settings','#collapsible'=>true,'#collapsed'=>true);
 	foreach( language_list() as $language ){
-		$form['intro_page_documenti_'.$language->language] = array(
+		$form['page']['referrer']['upload_files_to_user_referrer_data_template_'.$language->language] = array(
+			'#type' => 'textarea',
+			'#title' => t('Visualizza informazioni sul referente nell\'area documenti - Lingua '.$language->language),
+			'#default_value' => variable_get('upload_files_to_user_referrer_data_template_'.$language->language, ''),
+			'#description' => t('"user:"" tokens can be used here'),
+		);
+	}
+
+	$form['page']['intro']=array('#type'=>'fieldset','#title'=>'Intro settings','#collapsible'=>true,'#collapsed'=>true);
+
+	foreach( language_list() as $language ){
+		$form['page']['intro']['intro_page_documenti_'.$language->language] = array(
 			'#type' => 'textarea',
 			'#title' => t('Intro pagina Area Documenti Utente - Lingua '.$language->language),
 			'#default_value' => variable_get('intro_page_documenti_'.$language->language, ''),
@@ -627,11 +998,12 @@ function upload_files_to_user_form_admin($form,&$form_state){
 		);
 	}
 
-	$mailcases=Array(
+	$mailcases=array(
 		'new_category'=>'Nuova Categoria creata',
 		'new_file' => 'Nuovo file caricato',
+		'contact_referrer' => 'Nuovo messaggio cliente -> referente',
 	);
-	$form['emails']=Array('#type'=>'fieldset','#title'=>'E-Mails settings');
+	$form['emails']=array('#type'=>'fieldset','#title'=>'E-Mails settings');
 	
 	$form['emails']['notify_users_new_document_category']=array(
 			'#type'=>'checkbox',
@@ -670,16 +1042,192 @@ function upload_files_to_user_form_admin($form,&$form_state){
 
 
 /* ############### ACCESSORIE ######################### */
+
+function _upload_files_to_user_category_create_values_save($values){
+	$uid=$values['uid'];
+	$name=$values['category'];
+	$description=$values['description'];
+
+	$success =_upload_files_to_user_category_create($uid,$name,$description);
+	if($success == true) drupal_set_message(t('New Category created'));
+	else drupal_set_message(t('Errors during Category creation'),'error');
+}
+
+function _upload_files_to_user_category_create($uid,$name,$description){
+	global $language;
+	db_insert('upload_files_to_user_category')
+	->fields(array(
+		'name'			=>	$name,
+		'description'	=>	$description,
+		'uid'			=>	$uid,
+		'created'		=>	time(),
+	))
+	->execute();
 	
+	if( variable_get('notify_users_new_document_category',false) == true ){
+		$account=user_load($uid);
+		drupal_mail('upload_files_to_user','new_category',variable_get('site_mail',''),$language,array('account'=>$account,'category_name'=>$name,'category_description'=>$description),$account->mail);
+	}
+
+	return true;
+}
+
+function _upload_files_to_user_upload_file_values_save($values){
+	if( ($file = file_load($values['uploadfile'])) !== false ){		
+		$cid=$values['filecategory'];
+		$title=$values['filetitle'];
+		$uid=$values['uid'];
+		$tid=$values['filetag'];
+
+		$file->status = FILE_STATUS_PERMANENT;
+		$file->uid = $uid;
+		file_save($file);
+
+		$success = _upload_files_to_user_save_file($uid,$cid,$title,$tid,$file);
+
+		if($success == true) drupal_set_message(t('File uploaded succesfully'));
+		else drupal_set_message(t('Errors during File upload'), 'error');
+	}
+}
+
+function _upload_files_to_user_save_file($uid,$cid,$title,$tid,$file){
+	global $user,$language;
+	if(!is_object($file) || empty($file->fid)) return false;
+
+	$fid=$file->fid;
+	db_insert('upload_files_to_user_assoc')
+	->fields(array(
+			'cid'		=>	$cid,
+			'fid'		=>	$fid,
+			'uid'		=>	$uid,
+			'title'		=>	$title,
+			'tid'		=>	$tid,
+			'created'	=>	time(),
+	))
+	->execute();
+
+	if( variable_get('notify_users_new_document_file',false) == true){
+		$account=user_load($uid);
+		if($account->uid!=$user->uid){
+			drupal_mail('upload_files_to_user','new_file',variable_get('site_mail',''),$language,array('account'=>$account,'file'=>$file),$account->mail);
+		}
+	}
+
+	return true;
+}
+
+function _upload_files_to_user_category_delete($cid,$uid){
+	if(!is_numeric($cid) || $cid <= 0) return false;
+
+	if(!is_numeric($uid) || $uid <= 0){
+		$uid = db_query("SELECT uid FROM {upload_files_to_user_category} WHERE cid = :cid",array(':cid'=>$cid))->fetchField();
+	}
+
+	$account=user_load($uid);
+
+	$numfiles=0;
+	$numassocs=0;
+	foreach(_upload_files_to_user_get_category_fids($cid) as $fid){
+		$file=file_load($fid);
+		$success = _upload_files_to_user_file_delete($uid,$file);
+		if($success == true){
+			$numfiles++;
+		}
+	}
+	if($numfiles>0) drupal_set_message(t('!numfiles files deleted successfully',array('!numfiles'=>$numfiles)));
+
+	$num_deleted=db_delete('upload_files_to_user_category')
+	->condition('cid',$cid,'=')
+	->execute();
+
+	return true;
+}
+
+function _upload_files_to_user_file_delete($uid,$file){
+	global $user,$language;
+	if(!is_object($file) || !isset($file->fid)) return false;
+
+	$account = user_load($uid);
+	if(!is_object($account) || !isset($account->uid)) return false;
+
+	if( $file->uid != $account->uid ) return false;
+
+	$fid = $file->fid;
+
+	if( file_delete($file) === true ){
+		db_delete('upload_files_to_user_assoc')
+		->condition('fid',$fid)
+		->condition('uid',$uid)
+		->execute();
+	}
+
+	return true;
+}
+
+function _upload_files_to_user_get_vid($vocabulary_machine_name){
+	$names = taxonomy_vocabulary_get_names();
+	foreach($names as $voc){
+		if($voc->machine_name == $vocabulary_machine_name) return $voc->vid;
+	}
+	return -1;
+}
+
+function _get_query_string(SelectQueryInterface $query) {
+  $string = (string) $query;
+  $arguments = $query->arguments();
+
+  if (!empty($arguments) && is_array($arguments)) {
+    foreach ($arguments as $placeholder => &$value) {
+      if (is_string($value)) {
+        $value = "'$value'";
+      }
+    }
+
+    $string = strtr($string, $arguments);
+  }
+
+  return $string;
+}
+
+
+function _upload_files_to_user_get_rid_by_name($role){
+	$roles = user_roles();
+	$rids = array_flip($roles);
+	if(isset($rids[$role])) return $rids[$role];
+
+	return false;
+}
+
+function _upload_files_to_user_get_clients_uids($account){
+	if($account->uid == 0 ) return false;
+
+	$client_role_name = '';
+	$client_role_rid = variable_get('upload_files_to_user_clients_user_role','');
+	if(is_numeric($client_role_rid)){
+		$client_role_name = user_role_load($client_role_rid)->name;
+	}
+
+	$query = db_select('users_roles','ur');
+	$query->join('role','r','ur.rid=r.rid');
+	$query->join('users','u','ur.uid=u.uid');
+	$query->join('field_data_'.UPLOAD_FILE_TO_USER_USER_REFENCE_FIELD,'ref',"(u.uid=ref.entity_id AND ref.entity_type='user')");
+	$query->fields('u',array('uid'));
+	$query->condition('r.name',$client_role_name,'=');
+
+	if($account->uid > 1){
+		$query->condition('ref.'.UPLOAD_FILE_TO_USER_USER_REFENCE_FIELD.'_uid',$account->uid,'=');
+	}
+
+	$query->orderBy('u.name');
+	// print _get_query_string($query);
+	return $query->execute()->fetchAll();
+}
+
 function _upload_files_to_user_get_user_categories($account,$start=0,$limit=null){
-	
-	$query = db_select('upload_files_to_user_category','c')
-				->fields('c');
+	$query = db_select('upload_files_to_user_category','c')->fields('c');
 	$query->condition('uid',$account->uid,'=');
 	if($limit!=null && $limit>0){
 		$query->range($start,$limit);
-	}else{
-		//$query->range($start);
 	}
 	$query->orderBy('created');
 	return $query->execute()->fetchAll(PDO::FETCH_ASSOC);
@@ -693,23 +1241,43 @@ function _upload_files_to_user_get_category($cid){
 }
 
 function _upload_files_to_user_get_user_files($account,$cid = null){
-	
 	$query=db_select('file_managed','f');
 	$query->join('upload_files_to_user_assoc','a','a.fid = f.fid');
-	$query->join('upload_files_to_user_category','c','c.cid = a.cid');
-	
+	$query->join('taxonomy_term_data','t','t.tid = a.tid');
+
+	if($cid !== null && $cid != UPLOAD_FILES_TO_USER_GET_ALL_FILES){
+		$query->join('upload_files_to_user_category','c','c.cid = a.cid');
+		$query->addField('c', 'cid','category_id');
+		$query->addField('c', 'name','category_name');
+	}else{
+		$query->addExpression('NULL','category_id');
+		$query->addExpression('NULL','category_name');
+	}
+
+	if($cid != UPLOAD_FILES_TO_USER_GET_ALL_FILES){
+		$query->condition('a.cid',$cid);
+		$query->orderBy('a.cid');
+
+		if( $cid == null && !empty($_REQUEST['tag']) && is_numeric($_REQUEST['tag']) && $_REQUEST['tag']>0 ){
+			$query->condition('a.tid',$_REQUEST['tag']);
+		}
+
+
+		if( $cid == null && !empty($_REQUEST['title']) ){
+			$query->condition('a.title','%'.$_REQUEST['title'].'%','LIKE');
+		}
+	}
+
 	$query->fields('f',array('fid','filename','filemime','filesize','timestamp'));
 	$query->addField('a', 'title','file_title');
-	$query->addField('c', 'cid','category_id');
-	$query->addField('c', 'name','category_name');
-	
-	$query->condition('f.uid',$account->uid,'=');
-	
-	if($cid!=null) $query->condition('a.cid',$cid,'=');
+	$query->addField('t', 'name','tag');
+	$query->addField('t', 'tid','tid');
 
-	$query->orderBy('c.cid');
+	$query->condition('f.uid',$account->uid,'=');
 	$query->orderBy('f.timestamp');
-	
+
+	//print _get_query_string($query);
+
 	return $query->execute()->fetchAll(PDO::FETCH_ASSOC);
 }
 
@@ -727,32 +1295,12 @@ function _upload_files_to_user_print_file_widget($file,$account){
 	$out='';
 	
 	if(variable_get('documents_print_mode', 'list') != 'table' || (variable_get('documents_print_mode', 'list') == 'table' && variable_get('documents_columns_user_table', 1)>1) ){
-		$out=l(
-			trim($file['file_title'])!='' ? trim($file['file_title']) : t('download') ,
-			url(
-				file_create_url(file_load($file['fid'])->uri),
-				array('absolute'=>true)
-			) ,
-			array(
-					'attributes'=>array(
-						'class'=>array('file_download_lnk'),
-					)
-			)
-		);
-		if(variable_get('documents_show_file_details', 1) == 1){
-			$out .= '<div class="file-widget">'.
-						'<div class="filename"><span class="widget-label">'.t('File Name').'</span> '.$file['filename'].'</div>'.
-						'<div class="filemime"><span class="widget-label">'.t('File type').'</span> '.$file['filemime'].'</div>'.
-						'<div class="filesize"><span class="widget-label">'.t('File size').'</span> '.format_size($file['filesize']).'</div>'.
-						'<div class="timestamp"><span class="widget-label">'.t('Created on').'</span> '.format_date($file['timestamp']).'</div>'.
-					'</div>';
-		}
+		$out = theme('upload_files_to_user_file_widget',array('file'=>$file));
 		
 		if(user_access('user upload documents',$user)){
 			$out .= l(t('delete'),'user/'.$account->uid.'/delete_file/'.$file['fid'],array('attributes'=>array('class'=>array('file_delete_lnk'))));
 		}
 	}elseif(variable_get('documents_columns_user_table', 1) == 1){
-
 		$out = array(
 			l(
 				trim($file['file_title'])!='' ? trim($file['file_title']) : t('download') ,
@@ -767,20 +1315,26 @@ function _upload_files_to_user_print_file_widget($file,$account){
 				) 
 			),
 		);
-		
 		if(variable_get('documents_show_file_details', 1) == 1){
-			$out = array_merge($out,array(
+			$moreinfo = array(
+				$file['tag'],
 				$file['filename'],
 				$file['filemime'],
 				format_size($file['filesize']),
-				format_date($file['timestamp']),
-			));
+				format_date($file['timestamp'],variable_get('upload_files_to_user_date_format','')),
+			);
+			$out = array_merge($out,$moreinfo);
 		}
 		
 		if(user_access('user upload documents',$user)){
-			$out[count($out)-1][]=l(t('delete'),'user/'.$account->uid.'/delete_file/'.$file['fid'],array('attributes'=>array('class'=>array('file_delete_lnk'))));
+			$out[count($out)]= ' '.l(
+									t('delete'),
+									'user/'.$account->uid.'/delete_file/'.$file['fid'],
+									array('attributes'=>array(
+										'class'=>array('file_delete_lnk')
+									))
+			);
 		}
-
 	}
 
 	return $out;
@@ -802,15 +1356,148 @@ function upload_files_to_user_mail($key, &$message, $params){
 			$message['body']=array($message['body']);
 			break;
 		case 'new_file':		
+			
+			$file=$params['file'];
+			$message['subject'] = variable_get('mailcase_subject_'.$key.'_'.$language->language, '');
+			$message['body'] = variable_get('mailcase_text_'.$key.'_'.$language->language, '');
+			//'<br />'.$file['file_title'].'<br />'.$file['filename'].' '.$file['filemime'].' '.format_size($file['filesize']);
+			
+			$message['body']=array($message['body']);
+			break;
+		case 'contact_referrer':
+
 			$message['subject'] = variable_get('mailcase_subject_'.$key.'_'.$language->language, '');
 			$message['body'] = variable_get('mailcase_text_'.$key.'_'.$language->language, '');
 
-			$file=$params['file'];
-			$message['body'] .= '<br />'.$file['file_title'].'<br />'.$file['filename'].' '.$file['filemime'].' '.format_size($file['filesize']);
-			
-			$message['body']=array($message['body']);
-			break;			
+			$client = entity_metadata_wrapper('user', $params['client']);
+			$subject = $params['subject'];
+			$message = $params['message'];
+
+			$message['body'] .= "\n\n\n".t('Here the message details')."\n\n";
+			$message['body'] .= t('Submitted on').': '.format_date(time());
+			$message['body'] .= t('Client').': '.$client->name.' - '.$client->mail;
+			$message['body'] .= t('Subject').': '.$subject;
+			$message['body'] .= t('Message').":\n".$message;
+
+			break;
+	}
+	$message['body'] = explode("\n",$message['body']);
+}
+
+
+/**
+ * Implements hook_form_alter().
+ */
+function upload_files_to_user_form_alter(&$form, &$form_state, $form_id) {
+	global $user;
+	if($form_id == 'user_profile_form'){
+		if( $user->uid != 1 && !in_array('administrator', $user->roles) ){
+			$form['field_referente']['#access'] = false;
+		}
 	}
 }
 
 
+function _upload_files_to_user_print_referrer_data($account){
+	if( variable_get('upload_files_to_user_referrer_data_template_'.$account->language,'') == '' ) return false;
+	$wrapper = entity_metadata_wrapper('user', $account);
+	$referente = null;
+	if(is_numeric( $wrapper->field_referente->value() )){
+		$referente = user_load($wrapper->field_referente->value());
+	}else{
+		$referente = $wrapper->field_referente->value();
+	}
+	if(!is_object($referente)) return false;
+	$out = token_replace(variable_get('upload_files_to_user_referrer_data_template_'.$account->language,''), array('referrer'=>$referente,'client'=>$account) );
+	return $out;
+}
+
+/**
+ * Implements hook_token_info().
+ */
+function upload_files_to_user_token_info() {
+	$usertokens = user_token_info();
+	$tokens = array('tokens'=>array( ));
+
+	foreach(array('client','referrer') as $mytoken){
+		$tokens['types'][$mytoken]=$usertokens['types']['user'];
+		$tokens['types'][$mytoken]['type'] = 'user';
+		$tokens['types'][$mytoken]['name'] = t('User with !mytoken role',array('!mytoken'=>$mytoken));
+		unset($tokens['types'][$mytoken]['needs-data']);
+		foreach( $usertokens['tokens']['user'] as $key=>$elem ){
+			$tokens['tokens'][$mytoken][$key]=$elem;
+		}
+	}
+
+	foreach( $usertokens['tokens']['user'] as $key=>$elem ){
+		$tokens['tokens']['referrer'][$key]=$elem;
+	}
+
+	return $tokens;
+}
+/**
+* Implements hook_tokens(). This hook will operate the token and replace it with it's value.
+*/
+function upload_files_to_user_tokens($type, $tokens, array $data = array(), array $options = array()) {
+    $replacements = array();
+    $sanitize = !empty($options['sanitize']);
+    if ($type == 'client') {
+        foreach ($tokens as $name => $original) {
+        	$wrapper = entity_metadata_wrapper('user',$data['client']);
+			if (property_exists($data['client'],$name)) {
+			  $replacements[$original] = $wrapper->$name->value();
+			}
+        }
+    }
+    if ($type == 'referrer') {
+        foreach ($tokens as $name => $original) {
+        	$wrapper = entity_metadata_wrapper('user',$data['referrer']);
+			if (property_exists($data['referrer'],$name)) {
+			  $replacements[$original] = $wrapper->$name->value();
+			}
+        }
+    }    
+    return $replacements;
+}
+
+function upload_files_to_user_contact_referrer($form,&$form_state,$account,$referrer){
+	$form['client'] = array(
+		'#type'=>'value',
+		'#value'=>isset($form_state['values']['client']) ? $form_state['values']['client'] : $account->uid,
+	);
+	$form['referrer'] = array(
+		'#type'=>'value',
+		'#value'=>isset($form_state['values']['referrer']) ? $form_state['values']['referrer'] : $referrer->uid,
+	);
+	$form['subject']=array(
+		'#type'=>'textfield',
+		'#title'=>t('Subject'),
+		'#required' => true,
+	);
+	$form['message']=array(
+		'#type'=>'textarea',
+		'#rows' => 5,
+		'#resizable' => false,
+		'#title'=>t('Message'),
+		'#required' => true,
+	);
+	$form['submit']=array(
+		'#type'=>'submit',
+		'#value'=>t('Send'),
+	);
+	$form['destination'] = array(
+		'#type'=>'value',
+		'#value'=>(isset($form_state['values']['destination']) ?  $form_state['values']['destination'] : ((isset($_REQUEST['destination'])) ?  $_REQUEST['destination'] : 'user/'.$account->uid.'/documents')),
+	);
+	return $form;
+}
+
+function upload_files_to_user_contact_referrer_submit($form,&$form_state){
+	$client = user_load($form_state['values']['client']);
+	$referrer = user_load($form_state['values']['referrer']);
+
+	drupal_mail('upload_files_to_user', 'contact_referrer', $referrer->mail, $referrer->language, array('client'=>$client,'subject'=>$form_state['values']['subject'],'message'=>$form_state['values']['message']), $client->mail);
+
+	drupal_set_message( t('Message sent successfully') );
+	drupal_goto($form_state['values']['destination']);
+}

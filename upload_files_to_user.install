@@ -42,8 +42,7 @@ function upload_files_to_user_schema() {
 		'fields' => array(
 			'cid' => array(
 				'type' => 'int',
-				'unsigned' => TRUE,
-				'not null' => TRUE,
+				'not null' => FALSE,
 				'description' => 'Category ID',
 			),
 			'fid' => array(
@@ -64,7 +63,13 @@ function upload_files_to_user_schema() {
 				'not null' => TRUE,
 				'default' => '',
 				'description' => 'File Title',
-			),			
+			),
+			'tid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => FALSE,
+				'description' => 'File TAG',
+			),
 			'created' => array(
 				'type' => 'int',
 				'not null' => TRUE,
@@ -75,8 +80,37 @@ function upload_files_to_user_schema() {
 		'indexes' => array(
 			'uid' => array('uid'),
 		),
-		'primary key' => array('cid','fid'),
+		'primary key' => array('fid','uid'),
 	);
 	
 	return $schema;
+}
+
+function upload_files_to_user_install() {
+	_upload_files_to_user_create_field('field_referente', 'user', 'user');
+}
+
+function _upload_files_to_user_create_field($field_name, $entity_type, $bundle) {
+// var_dump($field_name);	
+	$field = field_info_field($field_name);
+// var_dump($field);
+	if (empty($field)) {
+	  $field = field_create_field(array(
+	  	'field_name'=>$field_name, 
+	  	'type' => 'user_reference',
+	  ));
+	}
+// var_dump($field);
+	$instance = field_info_instance($entity_type, $field_name, $bundle);
+	if (empty($instance)) {
+	  $instance = array(
+	    'field_name' => $field_name,
+	    'bundle' => $bundle,
+	    'entity_type' => $entity_type,
+	  );
+	  field_create_instance($instance);
+	}
+// var_dump($instance);
+// 	var_dump(func_get_args());
+// 	die(__FILE__.__LINE__);
 }
