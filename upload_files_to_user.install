@@ -83,11 +83,61 @@ function upload_files_to_user_schema() {
 		'primary key' => array('fid','uid'),
 	);
 	
+	$schema['upload_files_to_rid_assoc'] = array(
+		'fields' => array(
+			'fid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'description' => 'File ID',
+			),
+			'rid' => array(
+				'type' => 'int',
+				'size' => 'tiny',
+				'default' => 0,
+				'description' => 'Role ID',
+			),
+			'language' => array(
+				'type' => 'varchar',
+				'length' => 10,
+				'not null' => FALSE,
+				'description' => 'Language',
+			),			
+			'title' => array(
+				'type' => 'varchar',
+				'length' => 255,
+				'not null' => TRUE,
+				'default' => '',
+				'description' => 'File Title',
+			),
+			'tid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => FALSE,
+				'description' => 'File TAG',
+			),
+			'created' => array(
+				'type' => 'int',
+				'not null' => TRUE,
+				'description' => 'unix time',
+			),
+		),
+		'description' => 'Store Association beetween User Roles and Files',
+		'indexes' => array(
+			'rid' => array('rid'),
+		),
+		'primary key' => array('fid','rid'),
+	);
+
 	return $schema;
 }
 
 function upload_files_to_user_install() {
 	_upload_files_to_user_create_field('field_referente', 'user', 'user');
+}
+
+function upload_files_to_user_uninstall() {
+	field_delete_field("field_referente");
 }
 
 function _upload_files_to_user_create_field($field_name, $entity_type, $bundle) {
