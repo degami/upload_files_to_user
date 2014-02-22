@@ -1639,6 +1639,10 @@ function _upload_files_to_user_get_user_files($account,$cid = null){
 
 		$query->condition($or);
 
+		if( !empty($_REQUEST['title']) ){
+			$query->condition('a.title','%'.$_REQUEST['title'].'%','LIKE');
+		}
+
 		$query->orderBy('f.timestamp');
 
 //		print _get_query_string($query);
