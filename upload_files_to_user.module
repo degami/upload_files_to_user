@@ -76,6 +76,15 @@ function upload_files_to_user_menu(){
 		'access callback'=>'_upload_files_to_user_check_access',
 	  	'access arguments' => array('administer upload files to user'),
 	);
+
+	// $items['admin/config/upload_files_to_user/files'] = array(
+	//     'title' => t('Upload Files To User Files List'),
+	//     'description' => t('Upload Files To User Files List'),
+	//     'page callback' => 'drupal_get_form',
+	//     'page arguments' => array('upload_files_to_user_form_admin_files'),
+	// 	'access callback'=>'_upload_files_to_user_check_access',
+	//   	'access arguments' => array('administer upload files to user'),
+	// );	
 	return $items;
 }
 
@@ -163,6 +172,11 @@ function upload_files_to_user_theme($existing, $type, $theme, $path) {
 				'file'=>array(),
 	    	)
 		),
+
+		'upload_files_to_user_form_admin_files' => array(
+			'render element' => 'form',
+		),
+
 	);
 }
 
@@ -266,20 +280,22 @@ function upload_files_to_user_user_clients_page($account){
 /* ############### PAGINA DOCUMENTI CLIENTE ######################### */
 
 function _upload_files_to_user_get_listaclienti_intro($account){
-	$intro = variable_get('intro_page_clienti_documenti_'.$account->language,'');
+	global $language;
+	$intro = variable_get('intro_page_clienti_documenti_'.$language->language,'');
 	drupal_alter('upload_files_to_user_page_listaclienti_intro', $intro);
 	return $intro;
 }
 
 function _upload_files_to_user_get_intro($account){
-	$intro = variable_get('intro_page_documenti_'.$account->language,'');
+	global $language;
+	$intro = variable_get('intro_page_documenti_'.$language->language,'');
 	drupal_alter('upload_files_to_user_page_intro', $intro);
 	return $intro;
 }
 
 function upload_files_to_user_client_documents_page($account){
-	global $user; 
-	drupal_set_title(t(t(variable_get('upload_file_to_user_documents_area_title','Documents'))));
+	global $user;
+	drupal_set_title(t(variable_get('upload_file_to_user_documents_area_title','Documents')));
 
 	$tech_role_rid = variable_get('upload_files_to_user_technics_user_role', _upload_files_to_user_get_rid_by_name('administrator'));
 	$tech_role_name = is_numeric($tech_role_rid) ? user_role_load($tech_role_rid)->name : '';
@@ -907,10 +923,13 @@ function upload_files_to_user_form_upload_files($form,&$form_state){
 		$tagoptions = array();
 		$terms = taxonomy_get_tree(_upload_files_to_user_get_vid(variable_get('upload_files_to_user_tags_vocabulary_name','tags')));
 		foreach ($terms as $data) {
-			if(function_exists('entity_translation_get_handler')){
-				$tagoptions[$data->tid] = $data->name;
+			$term = taxonomy_term_load($data->tid);
+
+			if(function_exists('i18n_taxonomy_term_name')){
+				$translated_term_name = i18n_taxonomy_term_name($term, $language->language);
+				$tagoptions[$data->tid] = $translated_term_name;
 			}else{
-				$tagoptions[$data->tid] = $data->name;
+				$tagoptions[$data->tid] = $data->term;
 			}
 		}
 		$form['addfile']['filetag'] = array(
@@ -1016,20 +1035,13 @@ function upload_files_to_user_multiupload_file($form,&$form_state){
 		$tagoptions = array();
 		$terms = taxonomy_get_tree(_upload_files_to_user_get_vid(variable_get('upload_files_to_user_tags_vocabulary_name','tags')));
 		foreach ($terms as $data) {
+			$term = taxonomy_term_load($data->tid);
 
-
-			if(function_exists('entity_translation_get_handler')){
-				$handler = entity_translation_get_handler('taxonomy_term', taxonomy_term_load($data->tid));
-  				//$translations = $handler->getTranslations();
-				//var_dump($translations);
-				// var_dump( get_class_methods($handler) );
-				// var_dump( $handler->loadTranslations() );
-
-
-
-				$tagoptions[$data->tid] = $data->name;
+			if(function_exists('i18n_taxonomy_term_name')){
+				$translated_term_name = i18n_taxonomy_term_name($term, $language->language);
+				$tagoptions[$data->tid] = $translated_term_name;
 			}else{
-				$tagoptions[$data->tid] = $data->name;
+				$tagoptions[$data->tid] = $term->name;
 			}
 		}
 		$form['fieldset']['filetag'] = array(
@@ -1573,6 +1585,7 @@ function _upload_files_to_user_get_category($cid){
 }
 
 function _upload_files_to_user_get_user_files($account,$cid = null){
+	global $language;
 	$query=db_select('file_managed','f');
 	$query->join('upload_files_to_user_assoc','a','a.fid = f.fid');
 	$query->leftJoin('taxonomy_term_data','t','t.tid = a.tid');
@@ -1635,7 +1648,8 @@ function _upload_files_to_user_get_user_files($account,$cid = null){
 		$or->condition('a.language',null,'IS');
 
 		//$or->condition('a.language','u.language','=');
-		$or->where('a.language = u.language');
+		//$or->where('a.language = u.language');
+		$or->condition('a.language',$language->language,'=');
 
 		$query->condition($or);
 
@@ -1648,6 +1662,22 @@ function _upload_files_to_user_get_user_files($account,$cid = null){
 //		print _get_query_string($query);
 		$role_files = $query->execute()->fetchAll(PDO::FETCH_ASSOC);
 		$files = array_merge($files,$role_files);
+	}
+
+	foreach($files as &$file){
+		if(isset($file['tid']) && is_numeric($file['tid'])){
+			$term = taxonomy_term_load($file['tid']);
+			if( isset($term->name_field) ){
+				if( isset($term->name_field[$language->language]) ){
+					$file['tag'] = $term->name_field[$language->language][0]['value'];
+				}else if( isset($term->name_field[LANGUAGE_NONE]) ){
+					$file['tag'] = $term->name_field[LANGUAGE_NONE][0]['value'];
+				}
+			}else if(function_exists('i18n_taxonomy_term_name')){
+				$translated_term_name = i18n_taxonomy_term_name($term, $language->language);
+				$file['tag'] = $translated_term_name;
+			}
+		}
 	}
 
 	return $files;
@@ -1898,4 +1928,67 @@ function upload_files_to_user_contact_referrer_submit($form,&$form_state){
 
 	drupal_set_message( t('Message sent successfully') );
 	drupal_goto($form_state['values']['destination']);
+}
+
+function upload_files_to_user_form_admin_files($form,&$form_state){
+
+	$form['global_files'] = array(
+		'#type' => 'fieldset',
+		'#title' => t('Global Files'),
+	);
+
+	$query = db_select('upload_files_to_rid_assoc','a');
+	$query->join('file_managed','f','a.fid=f.fid');
+
+	$query->fields('a');
+	$query->fields('f');
+
+	foreach( $query->execute()->fetchAll(PDO::FETCH_OBJ) as $row ){
+		$form['global_files']['byrid_'.$row->rid.'_'.$row->fid] = array(
+			'#type' => 'checkbox',
+			'#info' => $row,
+		);
+	}
+
+	$form['individual_files'] = array(
+		'#type' => 'fieldset',
+		'#title' => t('Individual Files'),
+	);
+
+	$query = db_select('upload_files_to_user_assoc','a');
+	$query->join('file_managed','f','a.fid=f.fid');
+	$query->join('users','u','a.uid=u.uid');
+
+	$query->fields('a');
+	$query->fields('f');
+	$query->fields('u');
+
+	foreach( $query->execute()->fetchAll(PDO::FETCH_OBJ) as $row ){
+		$form['individual_files']['byuid_'.$row->uid.'_'.$row->fid] = array(
+			'#type' => 'checkbox',
+			'#info' => $row,
+		);
+	}
+
+	return $form;
+}
+
+function theme_upload_files_to_user_form_admin_files($variables){
+	$form = $variables['form'];
+var_dump($variables);
+	$header = array();
+
+	$rows = array();
+	foreach( element_children($form['global_files']) as $elemname ){
+
+	}
+	$out.=theme('table',array('header'=>$header,'rows'=>$rows,'empty' => t('No Elements Found')));
+
+
+	$rows = array();
+	foreach( element_children($form['individual_files']) as $elemname ){
+
+	}
+	$out.=theme('table',array('header'=>$header,'rows'=>$rows,'empty' => t('No Elements Found')));
+	return $out.drupal_render_children($form);
 }
